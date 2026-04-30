@@ -27,8 +27,8 @@ ARG GID=0
 FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
 ARG BUILD_HASH
 
-# Set Node.js options (heap limit Allocation failed - JavaScript heap out of memory)
-# ENV NODE_OPTIONS="--max-old-space-size=4096"
+# Open WebUI Vite build needs more than default Node heap (OOM at ~2GB otherwise).
+ENV NODE_OPTIONS="--max-old-space-size=8192"
 
 WORKDIR /app
 
@@ -45,6 +45,10 @@ RUN npm run build
 ######## WebUI backend ########
 FROM python:3.11.14-slim-bookworm AS base
 
+# Serialize with frontend stage: BuildKit otherwise runs `npm run build` and the huge
+# pip/torch layer in parallel, which routinely OOMs Docker Desktop ("cannot allocate memory").
+COPY --from=build /app/build/index.html /tmp/.owui-frontend-built.txt
+
 # Use args
 ARG USE_CUDA
 ARG USE_OLLAMA
@@ -58,7 +62,9 @@ ARG UID
 ARG GID
 
 # Python settings
-ENV PYTHONUNBUFFERED=1
+# PIP_DEFAULT_TIMEOUT: large torch wheels from PyTorch CDN can hit default pip read timeouts
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DEFAULT_TIMEOUT=600
 
 ## Basis ##
 ENV ENV=prod \

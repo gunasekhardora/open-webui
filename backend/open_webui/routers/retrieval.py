@@ -5,6 +5,8 @@ import os
 import shutil
 import asyncio
 
+import requests
+
 import re
 import uuid
 from datetime import datetime
@@ -1679,6 +1681,36 @@ async def process_file(
                 db=db,
             )
             hash = calculate_sha256_string(text_content)
+
+            # Optionally POST extracted document payload to external graph ingest.
+            if os.environ.get("NEO4J_GRAPH_INGEST"):
+                try:
+
+                    def _neo4j_ingest():
+                        svc = os.getenv("SHAKUDO_NEO4J_GRAPH_TOOL_MICROSERVICE")
+                        if not svc:
+                            raise ValueError(
+                                "SHAKUDO_NEO4J_GRAPH_TOOL_MICROSERVICE environment variable is required when NEO4J_GRAPH_INGEST is set"
+                            )
+                        payload = {
+                            "file_name": file.filename,
+                            "file_hash": hash if hash else "",
+                            "content": str(text_content),
+                            "chat_id": "123",
+                        }
+                        response = requests.post(svc, json=payload, timeout=10)
+                        response.raise_for_status()
+                        log.info("Successfully ingested file to neo4j.")
+
+                    await asyncio.to_thread(_neo4j_ingest)
+                except requests.RequestException as e:
+                    log.error(f"Error ingesting file to neo4j: {str(e)}")
+                except ValueError as e:
+                    log.error(str(e))
+                except Exception as e:
+                    log.error(f"Unexpected error during neo4j ingestion: {str(e)}")
+            else:
+                log.info("Neo4J Ingestion not configured")
 
             if request.app.state.config.BYPASS_EMBEDDING_AND_RETRIEVAL:
                 await Files.update_file_data_by_id(file.id, {'status': 'completed'}, db=db)
